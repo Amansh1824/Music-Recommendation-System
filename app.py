@@ -11,23 +11,16 @@ from wordcloud import WordCloud
 from tqdm import tqdm
 import shap
 
-#st.set_option('deprecation.showPyplotGlobalUse', False)S
-
-# -------------------------
-# Load and preprocess data
-# -------------------------
 @st.cache_data
 def load_data(nrows=5000):
     df = pd.read_csv("spotify.csv")
     df = df.dropna()
-    df = df.head(nrows)  # reduced for speed; change if you want more
-    # ensure numeric types where appropriate (some CSVs store booleans as strings)
+    df = df.head(nrows)
     if df['explicit'].dtype != 'int64' and df['explicit'].dtype != 'float64':
         try:
             df['explicit'] = df['explicit'].astype(int)
         except:
             df['explicit'] = df['explicit'].replace({True:1, False:0}).astype(int)
-    # create text features for TF-IDF
     df['text_features'] = (
         df['artists'].astype(str) + ' ' + df['album_name'].astype(str) + ' ' + df['track_name'].astype(str) + ' ' +
         df['track_genre'].astype(str) + ' ' + df['danceability'].astype(str) + ' ' +
@@ -39,23 +32,16 @@ def load_data(nrows=5000):
 
 df = load_data(5000)
 
-# -------------------------
-# TF-IDF & Cosine similarity
-# -------------------------
 tfidf_vectorizer = TfidfVectorizer(stop_words='english', max_features=5000)
 tfidf_matrix = tfidf_vectorizer.fit_transform(df['text_features'])
 cosine_sim = cosine_similarity(tfidf_matrix, tfidf_matrix)
 
-# -------------------------
-# Fast Content-based recommender using cosine similarity
-# -------------------------
 class SpotifyRecommendation:
     def __init__(self, dataset, cosine_sim_matrix):
         self.dataset = dataset
         self.cosine_sim = cosine_sim_matrix
 
     def recommend(self, song_name, amount=5):
-        # find index
         indices = self.dataset.index[self.dataset['track_name'].str.lower() == song_name.lower()].tolist()
         if not indices:
             return None
@@ -66,21 +52,13 @@ class SpotifyRecommendation:
         track_indices = [i[0] for i in sim_scores]
         return self.dataset[['artists', 'track_name']].iloc[track_indices].reset_index(drop=True)
 
-# -------------------------
-# KMeans clustering (numeric features)
-# -------------------------
 scaler = MinMaxScaler()
-# select numeric columns (int and float)
 numeric_cols = df.select_dtypes(include=['int64', 'float64']).columns.tolist()
-# if dataset has non-numeric in numeric_cols accidentally, this will handle it
 features = df[numeric_cols].fillna(0)
 normalized = scaler.fit_transform(features)
 kmeans = KMeans(n_clusters=10, n_init=10, random_state=42)
 df['cluster'] = kmeans.fit_predict(normalized)
 
-# -------------------------
-# Cluster-based recommendation (robust)
-# -------------------------
 def get_cluster_recommendations(track_name, df_subset, amount=5):
     matches = df_subset[df_subset['track_name'].str.lower() == track_name.lower()]
     if matches.empty:
@@ -91,9 +69,6 @@ def get_cluster_recommendations(track_name, df_subset, amount=5):
         return None
     return cluster_df[['artists', 'track_name']].sample(min(amount, len(cluster_df))).reset_index(drop=True)
 
-# -------------------------
-# Mood classification
-# -------------------------
 def categorize_mood(valence):
     if valence > 0.7:
         return 'Positive'
@@ -105,9 +80,6 @@ def categorize_mood(valence):
 if 'mood' not in df.columns:
     df['mood'] = df['valence'].apply(categorize_mood)
 
-# -------------------------
-# Streamlit UI
-# -------------------------
 st.title("🎧 Spotify Recommendation System (Optimized + SHAP)")
 
 menu = st.sidebar.selectbox("Choose a Feature", [
@@ -120,7 +92,6 @@ menu = st.sidebar.selectbox("Choose a Feature", [
     "Cluster Explainability (SHAP)"
 ])
 
-# Content-based
 if menu == "Content-Based Recommendation":
     st.header("🎯 Content-Based Recommendation (Fast)")
     song_input = st.text_input("Enter a song name (any case):", "Hold On")
@@ -130,10 +101,11 @@ if menu == "Content-Based Recommendation":
         results = rec_engine.recommend(song_input, amount=num)
         if results is not None and not results.empty:
             st.dataframe(results)
+            st.markdown("### 🤖 Why these songs were recommended")
+            st.markdown(f"Based on TF-IDF and cosine similarity, we found songs most textually and acoustically similar to '{song_input}'. Features like artists, genre, danceability, energy, and valence were used to find similar tracks.")
         else:
             st.warning("Song not found in dataset. Try exact track name from your CSV (or check capitalization).")
 
-# Cluster-based
 elif menu == "Cluster-Based Recommendation":
     st.header("🧠 Cluster-Based Recommendation")
     song_input = st.text_input("Enter song for cluster recs:", "Hold On")
@@ -142,10 +114,11 @@ elif menu == "Cluster-Based Recommendation":
         results = get_cluster_recommendations(song_input, df, amount=num)
         if results is not None and not results.empty:
             st.dataframe(results)
+            st.markdown("### 🤖 Why these songs were recommended")
+            st.markdown(f"The input song '{song_input}' belongs to a specific cluster based on its numeric audio features (e.g., energy, valence, danceability). The recommended songs are randomly sampled from the same cluster, sharing similar overall acoustic profiles.")
         else:
             st.warning("Song not found in dataset or no cluster matches.")
 
-# Mood-based
 elif menu == "Mood-Based Recommendation":
     st.header("😊 Mood-Based Recommendation")
     mood = st.radio("Choose mood:", ['Positive', 'Neutral', 'Negative'])
@@ -153,8 +126,9 @@ elif menu == "Mood-Based Recommendation":
     if st.button("Recommend by Mood"):
         sample = df[df['mood'] == mood].sample(min(num, len(df[df['mood'] == mood])))
         st.dataframe(sample[['artists', 'track_name', 'valence']].reset_index(drop=True))
+        st.markdown("### 🤖 Why these songs were recommended")
+        st.markdown(f"These songs fall under the '{mood}' category based on their valence scores — a measure of positivity in audio. Valence > 0.7 is Positive, 0.4–0.7 is Neutral, < 0.4 is Negative.")
 
-# Duration & Energy
 elif menu == "Duration & Energy-Based Recommendation":
     st.header("⚡ Filter by Duration & Energy")
     dur = st.slider("Select Duration (ms)", 60000, 400000, (150000, 300000))
@@ -166,8 +140,9 @@ elif menu == "Duration & Energy-Based Recommendation":
             st.warning("No matches for chosen ranges.")
         else:
             st.dataframe(filtered[['artists', 'track_name', 'duration_ms', 'energy']].sample(min(num, len(filtered))).reset_index(drop=True))
-
-# Visualizations
+            st.markdown("### 🤖 Why these songs were recommended")
+            st.markdown("These songs were filtered based on your preferred **duration** and **energy** levels. Longer durations often align with more immersive listening, while higher energy indicates louder, faster-paced tracks. Songs within both thresholds were selected.")
+ # Visualizations
 elif menu == "Visualizations":
     st.header("📊 Visual Analysis")
     with st.expander("Genre Popularity"):
